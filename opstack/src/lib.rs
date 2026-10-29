@@ -33,6 +33,12 @@ impl SequencerCommitment {
         let mut decoder = snap::raw::Decoder::new();
         let decompressed = decoder.decompress_vec(data)?;
 
+        // Gossip peers can send short payloads; slicing `[..65]` would panic and
+        // abort the opstack server (release profile uses panic=abort).
+        if decompressed.len() < 65 {
+            eyre::bail!("sequencer commitment too short: {} bytes", decompressed.len());
+        }
+
         let signature = Signature::try_from(&decompressed[..65])?;
         let data = Bytes::from(decompressed[65..].to_vec());
 
@@ -73,4 +79,22 @@ fn signature_msg(data: &[u8], chain_id: u64) -> B256 {
     ];
 
     keccak256(signing_data.concat())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sequencer_commitment_rejects_short_decompressed_payload() {
+        let msg = snap::raw::Encoder::new()
+            .compress_vec(&[0u8; 10])
+            .expect("compress");
+        let err = SequencerCommitment::new(&msg).expect_err("short payload must error");
+        assert!(
+            err.to_string().contains("too short"),
+            "unexpected error: {err}"
+        );
+    }
 }
